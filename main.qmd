@@ -1,0 +1,431 @@
+---
+title: Monthly Expense Report
+format: dashboard
+server: shiny
+theme: 
+  - default
+  - custom.scss
+---
+
+```{r}
+#| context: setup
+library(tidyverse)
+library(glue)
+library(shiny)
+library(reactable)
+# library(DT)
+
+master_data = 'data/cleaned/spendee.csv'
+df <- read.csv(master_data)
+
+df$Date <- as.Date(df$Date)
+
+df <- 
+  df %>% 
+    mutate(Expense = ifelse(Type == "Expense", Amount*-1, 0), 
+           Income = ifelse(Type == "Income", Amount, 0))
+
+positive_color = "#00BA38"
+negative_color = "#F8766D"
+
+```
+
+# {.sidebar}
+
+```{r}
+#| context: setup
+last_transaction <- max(df$Date)
+```
+
+Last transaction: **`r last_transaction`**
+
+**Filters**
+
+```{r}
+#| context: setup
+default_start_date = floor_date(Sys.Date(), 'month') - months(6)
+default_end_date = floor_date(Sys.Date(), 'month') - days(1)
+```
+
+```{r}
+dateInput(
+  "start_date", "Start Date",
+  value = default_start_date
+)
+
+dateInput(
+  "end_date", "End Date",
+  value = default_end_date
+)
+```
+
+```{r}
+#| context: setup
+round_hundred <- function(x){
+  if (x>0) {
+    rounded = ceiling(x/100)*100
+  } else if (x<0) {
+    rounded = floor(x/100)*100
+  } else {
+    rounded = 0
+  }
+
+  return(rounded)
+
+}
+max_amount = round_hundred(max(df$Amount))
+min_amount = round_hundred(min(df$Amount))
+```
+
+```{r}
+sliderInput( 
+    "amount_slider", "Amount", 
+    min = min_amount, max = max_amount, 
+    value = c(min_amount, max_amount), 
+    step = 100, 
+    width = '95%'
+    )
+ 
+```
+
+```{r}
+#| context: setup
+labels_choices <- df %>%
+  pull(Labels) %>%
+  unique()
+
+```
+
+```{r}
+checkboxGroupInput("label_filter", "Labels", 
+            choices = c('Select All', labels_choices), 
+            selected = 'Select All', 
+            )
+
+```
+
+```{r}
+#| context: setup
+category_choices <- df %>%
+  pull(Category) %>%
+  unique()
+
+```
+
+```{r}
+selectInput("category_filter", "Category", 
+            choices = c('Select All', 'Unselect All', category_choices), 
+            selected = 'Select All', 
+            multiple=TRUE)
+```
+
+# Cashflow
+## Row
+
+### 
+```{r}
+#| title: Cash Flow by Month
+plotOutput('cash_flow_plot')
+```
+
+### 
+```{r}
+#| title: Income and Expense by Month
+plotOutput('income_expense_plot')
+```
+
+## Row
+```{r}
+reactableOutput('monthly_cash_flow')
+```
+
+# By Labels
+## Row {height=50%}
+```{r}
+#| title: Monthly Expense by Labels
+
+plotOutput('exp_by_labels_plot')
+```
+
+## Row {height=50%}
+### Column
+```{r}
+#| title: Total Expense by Month & Labels
+reactableOutput('exp_by_labels_table')
+```
+
+### Column
+
+```{r}
+#| title: Monthly Average Expense by Labels
+reactableOutput('avg_exp_by_labels_table')
+```
+
+
+# By Category
+## Row {height=50%}
+```{r}
+#| title: Monthly Expense by Category
+
+plotOutput('exp_by_category_plot')
+```
+
+## Row {height=50%}
+### Column
+```{r}
+#| title: Total Expense by Month & Category
+reactableOutput('exp_by_category_table')
+```
+
+### Column
+
+```{r}
+#| title: Monthly Average Expense by Category
+reactableOutput('avg_exp_by_category_table')
+```
+
+# Transaction Log
+
+```{r}
+#| title: Filtered Transactions
+reactableOutput('transaction_table')
+
+downloadButton(outputId = 'download_data', label='Download')
+```
+
+# Error Log
+*Filters are not applied to this page. *
+```{r}
+#| context: setup
+uncat_trans <- df %>% 
+    filter(Labels==""|Category=="")
+
+uncat_count <- nrow(uncat_trans)
+
+# uncat_prompt <- glue('There are {uncat_count} uncategorised/unlabeled transactions. ')
+
+# print(uncat_prompt)
+
+# print(uncat_trans)
+```
+
+**There are `r uncat_count` uncategorised/unlabeled transactions. **
+
+```{r}
+print(
+  uncat_trans %>% 
+    select(Date, Type, Category, Labels, Amount, Note)
+  )
+```
+
+```{r}
+#| context: server
+observe({
+  if ("Select All" %in% input$label_filter) {
+    updateSelectInput(session, "label_filter", 
+                      selected = labels_choices)
+  }
+})
+
+observe({
+  if ("Select All" %in% input$category_filter) {
+    updateSelectInput(session, "category_filter", 
+                      selected = category_choices)
+  }
+})
+
+observe({
+  if ("Unselect All" %in% input$category_filter) {
+    updateSelectInput(session, "category_filter", 
+                      selected = "")
+  }
+})
+
+filtered_data <- reactive({
+  df %>% 
+      filter(
+        Labels %in% input$label_filter, 
+        Category %in% input$category_filter, 
+        Date >= input$start_date, 
+        Date <= input$end_date, 
+        Amount >= input$amount_slider[1], 
+        Amount <= input$amount_slider[2]
+      )})
+
+cash_flow_data <- reactive({
+  filtered_data() %>% 
+    group_by(YearMonth) %>% 
+    summarise(
+      CashFlow = round(sum(Amount), 2), 
+      Income = round(sum(Income), 2), 
+      Expense = round(sum(Expense), 2)
+      ) %>% 
+      mutate(PosNeg = ifelse(CashFlow >=0, "Positive", "Negative"))
+})
+
+output$monthly_cash_flow <- renderReactable({
+  cash_flow_data() %>% 
+    select(YearMonth, CashFlow, Income, Expense) %>% 
+    reactable()
+})
+
+output$cash_flow_plot <- renderPlot({
+  cash_flow_data() %>% 
+    ggplot() + 
+    geom_col(
+      aes(
+        x = YearMonth, y = CashFlow, fill = PosNeg), 
+      show.legend = FALSE, 
+      width=.5) + 
+    theme_minimal() + 
+    scale_fill_manual(values=c(
+      "Positive"=positive_color, 
+      "Negative"=negative_color
+    ))
+})
+
+output$income_expense_plot <- renderPlot({
+  cash_flow_data() %>% 
+    select(YearMonth, Expense, Income) %>%
+    pivot_longer(
+      cols = c(Expense, Income), 
+      names_to = "Category",
+      values_to = "Amount") %>% 
+    ggplot() + 
+    geom_col(
+      aes(
+        x=YearMonth, y=Amount, fill=Category
+      ), 
+      position='dodge') + 
+    theme_minimal() + 
+    scale_fill_manual(values=c(
+      "Income"=positive_color, 
+      "Expense"=negative_color
+    ))
+})
+
+
+exp_by_labels <- reactive({
+  filtered_data() %>% 
+    filter(Type=='Expense') %>%
+    group_by(YearMonth, Labels) %>% 
+    summarise(TotalExpense = sum(Expense)) %>% 
+    ungroup()
+})
+
+output$exp_by_labels_table <- renderReactable({
+  exp_by_labels() %>% 
+    reactable(searchable = TRUE)
+})
+
+
+avg_exp_by_labels <- reactive({
+  start_date <- as.Date(input$start_date)
+  end_date <- as.Date(input$end_date)
+  
+  months_diff <- 
+    ceiling(interval(start_date, end_date) / months(1))
+  
+  exp_by_labels() %>% 
+    group_by(Labels) %>% 
+    summarise(TotalExpense = sum(TotalExpense)) %>% 
+    ungroup() %>% 
+    mutate(TotalExpense = round(TotalExpense, 2)) %>% 
+    mutate(AverageExpense = round(TotalExpense/months_diff, 2))
+})
+
+output$avg_exp_by_labels_table <- renderReactable({
+  avg_exp_by_labels() %>% 
+    reactable(searchable = TRUE)
+})
+
+
+output$exp_by_labels_plot <- renderPlot({
+  exp_by_labels() %>% 
+    ggplot() + 
+    geom_col(aes(
+      x = YearMonth, 
+      y = TotalExpense, 
+      fill = Labels
+    )) + 
+    theme_minimal() + 
+    coord_flip() + 
+    scale_y_continuous(breaks = seq(0, 5000, 500), 
+                      minor_breaks = seq(0, 5000, 100))
+})
+
+
+exp_by_category <- reactive({
+  filtered_data() %>% 
+    filter(Type=='Expense') %>%
+    group_by(YearMonth, Category) %>% 
+    summarise(TotalExpense = sum(Expense)) %>% 
+    ungroup()
+})
+
+output$exp_by_category_table <- renderReactable({
+  exp_by_category() %>% 
+    reactable(searchable = TRUE)
+})
+
+avg_exp_by_category <- reactive({
+  start_date <- as.Date(input$start_date)
+  end_date <- as.Date(input$end_date)
+  
+  months_diff <- 
+    ceiling(interval(start_date, end_date) / months(1))
+  
+  exp_by_category() %>% 
+    group_by(Category) %>% 
+    summarise(TotalExpense = sum(TotalExpense)) %>% 
+    ungroup() %>% 
+    mutate(TotalExpense = round(TotalExpense, 2)) %>% 
+    mutate(AverageExpense = round(TotalExpense/months_diff, 2))
+})
+
+output$avg_exp_by_category_table <- renderReactable({
+  avg_exp_by_category() %>% 
+    reactable(searchable = TRUE)
+})
+
+output$exp_by_category_plot <- renderPlot({
+  exp_by_category() %>% 
+    ggplot() + 
+    geom_col(aes(
+      x = YearMonth, 
+      y = TotalExpense, 
+      fill = Category
+    )) + 
+    theme_minimal() + 
+    coord_flip() + 
+    scale_y_continuous(breaks = seq(0, 5000, 500), 
+                      minor_breaks = seq(0, 5000, 100))
+})
+
+
+output$transaction_table <- renderReactable({
+  filtered_data() %>%
+    mutate(Date = format(Date, "%Y-%m-%d")) %>%
+    select(Date, Type, Category, Labels, Amount, Note) %>% 
+    reactable(searchable = TRUE)
+})
+
+output$download_data <- downloadHandler(
+  filename = function() {
+    paste(Sys.Date(), '_filtered_transactions', '.csv', sep='')
+  }, 
+  content = function(file) {
+    write.csv(
+      filtered_data() %>% 
+        mutate(Date = format(Date, "%Y-%m-%d")) %>%
+        select(Date, Type, Category, Labels, Amount, Note), 
+        file, 
+        row.names=FALSE)
+  }
+  
+#   },
+#   content = function(con) {
+#     write.csv(data, con)
+)
+
+```
