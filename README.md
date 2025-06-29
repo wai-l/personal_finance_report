@@ -5,9 +5,8 @@
   
 ## Project Overview
 
-### Data Cleaning (Python):
-Python script is used to clean, preprocess, and merge monthly data downloaded from Spendee. 
-Multiple monthly data files are concatenated into a single master file for analysis. 
+## Data Cleaning / ETL (Python):
+Used Python to clean and preprocess monthly Spendee exports. The process consolidated multiple files into a single master dataset, forming the ETL layer for a downstream Shiny dashboard.
 
 ### Interactive Dashboard (R):
 An interactive Quarto Shiny dashboard is built using R to provide a visual breakdown of spending and income by category for each month.
